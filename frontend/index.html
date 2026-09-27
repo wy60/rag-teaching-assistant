@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <title>算法设计与分析·智能助教</title>
+
+    <!-- Markdown 渲染 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <!-- 数学公式渲染 -->
+    <script>
+        window.MathJax = {
+            tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] },
+            svg: { fontCache: 'global' }
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+
+    <style>
+        body {
+            font-family: "Segoe UI", sans-serif;
+            background: #f5f5f5;
+            margin: 0;
+        }
+        .chat-container {
+            width: 60%;
+            margin: 40px auto;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .messages {
+            height: 500px;
+            overflow-y: auto;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .msg {
+            margin-bottom: 24px;
+            white-space: normal;
+        }
+        .msg .role {
+            font-weight: bold;
+            font-size: 16px;
+        }
+        .user {
+            color: #2574f0;
+        }
+        .assistant {
+            color: #1a8b1a;
+        }
+
+        textarea {
+            width: 100%;
+            height: 80px;
+            padding: 8px;
+            font-size: 16px;
+            border-radius: 8px;
+        }
+        button {
+            margin-top: 12px;
+            padding: 12px 16px;
+            font-size: 16px;
+            border: none;
+            background: #2574f0;
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0059d4;
+        }
+    </style>
+</head>
+<body>
+
+<div class="chat-container">
+    <h2>📘 《算法设计与分析》课程智能助教</h2>
+
+    <div class="messages" id="messages"></div>
+
+    <textarea id="input" placeholder="请输入你的问题..."></textarea>
+    <button onclick="sendMessage()">发送</button>
+</div>
+
+<script>
+let history = [];
+
+function appendMessage(role, content) {
+    const messagesDiv = document.getElementById("messages");
+    const div = document.createElement("div");
+    div.className = "msg";
+
+    // 渲染 markdown → HTML
+    const htmlContent = marked.parse(content);
+
+    div.innerHTML = `
+        <div class="role ${role}">
+            ${role === "user" ? "学生" : "助教"}：
+        </div>
+        <div class="content">
+            ${htmlContent}
+        </div>
+    `;
+
+    messagesDiv.appendChild(div);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+    // 渲染 MathJax
+    if (window.MathJax) {
+        MathJax.typesetPromise([div]);
+    }
+}
+
+async function sendMessage() {
+    const input = document.getElementById("input");
+    const text = input.value.trim();
+    if (!text) return;
+
+    appendMessage("user", text);
+
+    const payload = {
+        query: text,
+        history: history
+    };
+
+    input.value = "";
+
+    const messagesDiv = document.getElementById("messages");
+    const div = document.createElement("div");
+    div.className = "msg";
+    div.innerHTML = `
+        <div class="role assistant">助教：</div>
+        <div class="content" id="stream-content">（助教正在思考中……）</div>
+    `;
+    messagesDiv.appendChild(div);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+    let response;
+    try {
+        response = await fetch("http://127.0.0.1:8000/chat_stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+        });
+    } catch (e) {
+        const contentEl = div.querySelector("#stream-content");
+        contentEl.textContent = "请求失败：" + String(e);
+        return;
+    }
+    if (!response.ok || !response.body) {
+        const contentEl = div.querySelector("#stream-content");
+        contentEl.textContent = "服务不可用或无响应体";
+        return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    const contentEl = div.querySelector("#stream-content");
+    let accum = "";
+    let renderTimer = null;
+    const render = () => {
+        const html = marked.parse(accum);
+        contentEl.innerHTML = html;
+        if (window.MathJax) {
+            MathJax.typesetPromise([div]);
+        }
+    };
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        accum += chunk;
+        if (!renderTimer) {
+            renderTimer = setTimeout(() => {
+                renderTimer = null;
+                render();
+            }, 120);
+        }
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+    if (renderTimer) {
+        clearTimeout(renderTimer);
+        renderTimer = null;
+    }
+    render();
+
+    history.push({ role: "user", content: text });
+    history.push({ role: "assistant", content: accum });
+}
+</script>
+
+</body>
+</html>
